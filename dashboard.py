@@ -2,7 +2,6 @@ import streamlit as st
 import requests
 import pandas as pd
 import plotly.express as px
-import os
 
 # ==========================
 # LOGIN DE SEGURIDAD
@@ -32,25 +31,21 @@ HEADERS = {
 # ==========================
 @st.cache_data
 def fetch_patients():
-    try:
-        resp = requests.get(f"{API_URL}/fhir/Patient?limit=100&offset=0", headers=HEADERS, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()["data"]
-        return pd.DataFrame(data)
-    except Exception as e:
-        st.error(f"Error al cargar pacientes: {e}")
+    resp = requests.get(f"{API_URL}/fhir/Patient?limit=100&offset=0", headers=HEADERS)
+    if resp.status_code != 200:
+        st.error(f"Error al cargar pacientes: {resp.text}")
         return pd.DataFrame()
+    data = resp.json()["data"]
+    return pd.DataFrame(data)
 
 @st.cache_data
 def fetch_observations():
-    try:
-        resp = requests.get(f"{API_URL}/fhir/Observation?limit=500&offset=0", headers=HEADERS, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()["data"]
-        return pd.DataFrame(data)
-    except Exception as e:
-        st.error(f"Error al cargar observaciones: {e}")
+    resp = requests.get(f"{API_URL}/fhir/Observation?limit=500&offset=0", headers=HEADERS)
+    if resp.status_code != 200:
+        st.error(f"Error al cargar observaciones: {resp.text}")
         return pd.DataFrame()
+    data = resp.json()["data"]
+    return pd.DataFrame(data)
 
 patients_df = fetch_patients()
 obs_df = fetch_observations()
@@ -74,12 +69,18 @@ if patient_obs.empty:
 # VALIDACION DE OUTLIERS
 # ==========================
 def highlight_outliers(value, code):
-    if code.upper() == "TEMP" and (value is not None) and (value < 30 or value > 45):
+    # Ejemplo: Temperatura > 45°C, Presión arterial muy alta (>300 mmHg)
+    try:
+        val = float(value)
+    except:
+        return ""
+    if code == "TEMP" and (val < 30 or val > 45):
         return "color: red; font-weight: bold"
-    if code.upper() == "BP" and (value is not None) and (value > 300 or value < 30):
+    if code == "BP" and (val > 300 or val < 30):
         return "color: red; font-weight: bold"
     return ""
 
+# Convertimos valores numéricos si es posible
 def safe_float(x):
     try:
         return float(x)
@@ -87,6 +88,9 @@ def safe_float(x):
         return None
 
 patient_obs["value_num"] = patient_obs["value"].apply(safe_float)
+
+# Creamos columna de estilos
+patient_obs["style"] = patient_obs.apply(lambda row: highlight_outliers(row["value_num"], row["code"]), axis=1)
 
 # ==========================
 # GRAFICAS DINAMICAS
@@ -99,20 +103,26 @@ for code in patient_obs["code"].unique():
         continue
 
     fig = px.line(df_code, x="created_at", y="value_num", title=f"{code} en el tiempo")
-    
+
     # Marcar puntos fuera de rango
     outliers = df_code[(df_code["value_num"] > 45) | (df_code["value_num"] < 30)]
     if not outliers.empty:
-        fig.add_scatter(x=outliers["created_at"], y=outliers["value_num"],
-                        mode="markers", marker=dict(color="red", size=10),
-                        name="Outlier")
+        fig.add_scatter(
+            x=outliers["created_at"], 
+            y=outliers["value_num"],
+            mode="markers", 
+            marker=dict(color="red", size=10),
+            name="Outlier"
+        )
     st.plotly_chart(fig, use_container_width=True)
 
 # ==========================
 # TABLA RESUMEN CON ALERTAS
 # ==========================
 st.subheader("Resumen de Observaciones")
-def style_row(row):
-    return [highlight_outliers(v, c) for v, c in zip(row["value_num"], row["code"])]
 
-st.dataframe(patient_obs.style.apply(style_row, axis=1))
+# Aplicamos estilos a la columna 'value_num'
+def style_value_column(row):
+    return [""] * len(row) if pd.isna(row["value_num"]) else [row["style"] if col == "value_num" else "" for col in row.index]
+
+st.dataframe(patient_obs.style.apply(style_value_column, axis=1))
