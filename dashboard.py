@@ -179,13 +179,22 @@ for code in patient_obs["code"].unique():
 # ==========================
 st.subheader("Resumen de Observaciones")
 
+# Incluimos outlier para poder usarlo en estilos
+styled_df = patient_obs[
+    ["created_at", "code", "value", "value_num", "outlier"]
+].sort_values("created_at", ascending=False)
+
+
 def highlight_row(row):
     if row["outlier"]:
         return ["color: red; font-weight: bold"] * len(row)
     return [""] * len(row)
 
-styled_df = patient_obs[
-    ["created_at", "code", "value", "value_num"]
-].sort_values("created_at", ascending=False)
 
-st.dataframe(styled_df.style.apply(highlight_row, axis=1))
+# Aplicamos estilos
+styled = styled_df.style.apply(highlight_row, axis=1)
+
+# Ocultamos la columna outlier en la visualización
+styled = styled.hide(axis="columns", subset=["outlier"])
+
+st.dataframe(styled, use_container_width=True)
