@@ -31,7 +31,7 @@ HEADERS = {
 # ==========================
 # FUNCIONES API (CACHE SEGURO)
 # ==========================
-@st.cache_data
+@st.cache_data(ttl=15)
 def fetch_patients(access_key, permission_key):
     headers = {
         "x-access-key": access_key,
@@ -43,7 +43,7 @@ def fetch_patients(access_key, permission_key):
     return pd.DataFrame(resp.json()["data"])
 
 
-@st.cache_data
+@st.cache_data(ttl=15)
 def fetch_observations(access_key, permission_key):
     headers = {
         "x-access-key": access_key,
