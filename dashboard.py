@@ -51,15 +51,21 @@ def fetch_observations(access_key, permission_key):
     }
     resp = requests.get(f"{API_URL}/fhir/Observation?limit=500&offset=0", headers=headers)
     if resp.status_code != 200:
-        return None
-    return pd.DataFrame(resp.json()["data"])
+        return None, None
+
+    json_data = resp.json()
+
+    data = pd.DataFrame(json_data.get("data", []))
+    alerts = json_data.get("alerts", [])
+
+    return data, alerts
 
 
 # ==========================
 # CARGA DATOS
 # ==========================
 patients_df = fetch_patients(access_key, permission_key)
-obs_df = fetch_observations(access_key, permission_key)
+obs_df, alerts = fetch_observations(access_key, permission_key)
 
 if patients_df is None or patients_df.empty:
     st.error("No se pudieron cargar pacientes o no tienes permisos.")
@@ -73,18 +79,33 @@ if obs_df is None:
 # DETECTAR ROL
 # ==========================
 is_patient = len(patients_df) == 1
+is_medico = not is_patient
 
 # ==========================
-# SELECCION DE PACIENTE
+# SELECCIÓN DE PACIENTE
 # ==========================
 if is_patient:
     selected_patient = patients_df.iloc[0]["id"]
     st.subheader(f"Paciente: {selected_patient}")
+
 else:
-    selected_patient = st.selectbox(
-        "Seleccione un paciente",
-        patients_df["id"].tolist()
+    st.subheader("Lista de Pacientes")
+
+    display_df = patients_df[["id", "given_name", "family_name", "gender", "birth_date"]]
+
+    selected_row = st.dataframe(
+        display_df,
+        use_container_width=True,
+        on_select="rerun",
+        selection_mode="single-row"
     )
+
+    if selected_row and selected_row["selection"]["rows"]:
+        selected_index = selected_row["selection"]["rows"][0]
+        selected_patient = display_df.iloc[selected_index]["id"]
+    else:
+        st.info("Seleccione un paciente de la tabla")
+        st.stop()
 
 # ==========================
 # INFO DEL PACIENTE
@@ -100,6 +121,67 @@ if not patient_info.empty:
     col3.metric("Fecha Nacimiento", info.get("birth_date", "N/A"))
 
 # ==========================
+# NUEVA OBSERVACIÓN
+# ==========================
+if is_medico:
+    st.subheader("Registrar Nueva Observación")
+
+    with st.form("new_obs_form"):
+        col1, col2 = st.columns(2)
+
+        code = col1.selectbox(
+            "Tipo de Signo Vital",
+            [
+                "heart_rate",
+                "temperature",
+                "glucose",
+                "platelets",
+                "systolic_pressure",
+                "diastolic_pressure"
+            ]
+        )
+
+        value = col2.number_input("Valor", step=0.1)
+
+        unit = st.text_input("Unidad")
+
+        submit_obs = st.form_submit_button("Guardar Observación")
+
+        # VALIDACIÓN DE IMPOSIBLES (SOLO VISUAL)
+        impossible = False
+
+        if code == "temperature" and value > 45:
+            impossible = True
+        if code == "heart_rate" and value > 250:
+            impossible = True
+        if code == "systolic_pressure" and value > 350:
+            impossible = True
+
+        if impossible:
+            st.error("⚠ Valor clínicamente imposible detectado")
+
+        if submit_obs:
+            payload = {
+                "patient_id": selected_patient,
+                "code": code,
+                "value": value,
+                "unit": unit
+            }
+
+            r = requests.post(
+                f"{API_URL}/fhir/Observation",
+                headers=HEADERS,
+                json=payload
+            )
+
+            if r.status_code == 200:
+                st.success("Observación registrada")
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error("Error al guardar observación")
+
+# ==========================
 # FILTRAR OBSERVACIONES
 # ==========================
 patient_obs = obs_df[obs_df["patient_id"] == selected_patient].copy()
@@ -107,6 +189,30 @@ patient_obs = obs_df[obs_df["patient_id"] == selected_patient].copy()
 if patient_obs.empty:
     st.info("No hay observaciones registradas para este paciente.")
     st.stop()
+
+# ==========================
+# ALERTAS CLÍNICAS
+# ==========================
+if is_medico and alerts:
+
+    patient_alerts = [
+        a for a in alerts
+        if a.get("patient_id") == selected_patient
+    ]
+
+    if patient_alerts:
+        st.subheader("🚨 Alertas Clínicas Detectadas")
+
+        for alert in patient_alerts:
+
+            if alert["type"] == "valor_anormal":
+                st.error(f"Valor anormal detectado en {alert['code']}")
+
+            if alert["type"] == "tendencia_ascendente":
+                st.warning(f"Tendencia ascendente en {alert['code']}")
+
+            if alert["type"] == "tendencia_descendente":
+                st.warning(f"Tendencia descendente en {alert['code']}")
 
 # ==========================
 # LIMPIEZA DATOS
@@ -161,6 +267,21 @@ for code in patient_obs["code"].unique():
         markers=True
     )
 
+    # MARCAR VALORES CLÍNICAMENTE ANORMALES (SOLO MÉDICO)
+    if is_medico and "is_abnormal" in df_code.columns:
+
+        abnormal_points = df_code[df_code["is_abnormal"] == True]
+
+        if not abnormal_points.empty:
+            fig.add_scatter(
+                x=abnormal_points["created_at"],
+                y=abnormal_points["value_num"],
+                mode="markers",
+                marker=dict(color="red", size=14),
+                name="Anormal"
+            )
+
+    # OUTLIERS IMPOSIBLES
     outliers = df_code[df_code["outlier"]]
 
     if not outliers.empty:
