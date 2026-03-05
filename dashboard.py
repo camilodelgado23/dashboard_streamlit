@@ -85,10 +85,11 @@ is_medico = not is_patient
 # ==========================
 # SELECCIÓN DE PACIENTE
 # ==========================
-# ADMIN → solo ve conteo
-if "total" in patients_df.columns:
-    st.subheader("Resumen de Observaciones por Paciente (Admin)")
-    st.dataframe(patients_df, use_container_width=True)
+# ADMIN
+if "serialized_data" in patients_df.columns:
+    st.subheader("Lista de Pacientes (Admin)")
+    st.dataframe(patients_df[["id"]], use_container_width=True)
+    st.info("El administrador solo puede visualizar IDs.")
     st.stop()
 
 # PACIENTE
@@ -100,11 +101,11 @@ if len(patients_df) == 1:
 else:
     st.subheader("Lista de Pacientes")
 
-    display_columns = [col for col in 
-                       ["id", "given_name", "family_name", "gender", "birth_date"] 
-                       if col in patients_df.columns]
+    # Solo mostrar columnas que existan
+    available_cols = [col for col in ["id","given_name","family_name","gender","birth_date"] 
+                      if col in patients_df.columns]
 
-    display_df = patients_df[display_columns]
+    display_df = patients_df[available_cols]
 
     selected_patient = st.selectbox(
         "Seleccione un paciente",
@@ -189,14 +190,25 @@ if is_medico:
 # FILTRAR OBSERVACIONES
 # ==========================
 
-if obs_df is None or obs_df.empty or "patient_id" not in obs_df.columns:
+# ==========================
+# FILTRAR OBSERVACIONES
+# ==========================
+# ADMIN no recibe observaciones reales
+if "total" in obs_df.columns:
+    st.subheader("Resumen de Observaciones por Paciente")
+    st.dataframe(obs_df, use_container_width=True)
+    st.stop()
+
+# Si no hay columna patient_id no seguimos
+if obs_df.empty or "patient_id" not in obs_df.columns:
     st.info("No hay observaciones disponibles.")
-    patient_obs = pd.DataFrame()
-else:
-    patient_obs = obs_df[obs_df["patient_id"] == selected_patient].copy()
+    st.stop()
+
+patient_obs = obs_df[obs_df["patient_id"] == selected_patient].copy()
 
 if patient_obs.empty:
     st.info("No hay observaciones registradas para este paciente.")
+    st.stop()
 
 # ==========================
 # ALERTAS CLÍNICAS
@@ -252,13 +264,14 @@ def is_outlier(value, code):
         return value < 30 or value > 250
     if code == "systolic_pressure":
         return value < 50 or value > 300
+
     return False
 
-
-patient_obs["outlier"] = patient_obs.apply(
-    lambda row: is_outlier(row["value_num"], row["code"]),
-    axis=1
-)
+if not patient_obs.empty:
+    patient_obs["outlier"] = patient_obs.apply(
+        lambda row: is_outlier(row.get("value_num"), row.get("code")),
+        axis=1
+    )
 
 # ==========================
 # GRAFICAS
