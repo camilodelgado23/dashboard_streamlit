@@ -12,7 +12,6 @@ st.set_page_config(page_title="Dashboard Clínica", layout="wide")
 st.title("Dashboard de Gestión Clínica")
 
 # ==========================
-
 # LOGIN
 # ==========================
 with st.sidebar.form("login_form"):
@@ -50,23 +49,27 @@ def fetch_observations(access_key, permission_key):
         "x-access-key": access_key,
         "x-permission-key": permission_key
     }
-    resp = requests.get(f"{API_URL}/fhir/Observation?limit=500&offset=0", headers=headers)
+
+    resp = requests.get(
+        f"{API_URL}/fhir/Observation?limit=500&offset=0",
+        headers=headers
+    )
+
     if resp.status_code != 200:
         return None, None
 
     json_data = resp.json()
 
-    data = pd.DataFrame(json_data.get("data", []))
-    alerts = json_data.get("alerts", [])
+    obs_df = pd.DataFrame(json_data.get("data", []))
+    alerts_df = pd.DataFrame(json_data.get("alerts", []))
 
-    return data, alerts
-
+    return obs_df, alerts_df
 
 # ==========================
 # CARGA DATOS
 # ==========================
 patients_df = fetch_patients(access_key, permission_key)
-obs_df, alerts = fetch_observations(access_key, permission_key)
+obs_df, alerts_df = fetch_observations(access_key, permission_key)
 
 if patients_df is None or patients_df.empty:
     st.error("No se pudieron cargar pacientes o no tienes permisos.")
@@ -79,38 +82,46 @@ if obs_df is None:
 # ==========================
 # DETECTAR ROL
 # ==========================
-is_patient = len(patients_df) == 1
-is_medico = not is_patient
+is_admin = "serialized_data" in patients_df.columns
+is_patient = not is_admin and len(patients_df) == 1
+is_medico = not is_admin and not is_patient
 
 # ==========================
 # SELECCIÓN DE PACIENTE
 # ==========================
 # ADMIN
-if "serialized_data" in patients_df.columns:
+if is_admin:
     st.subheader("Lista de Pacientes (Admin)")
     st.dataframe(patients_df[["id"]], use_container_width=True)
-    st.info("El administrador solo puede visualizar IDs.")
     st.stop()
 
 # PACIENTE
-if len(patients_df) == 1:
+if is_patient:
     selected_patient = patients_df.iloc[0]["id"]
     st.subheader(f"Paciente: {selected_patient}")
 
 # MÉDICO
-else:
-    st.subheader("Lista de Pacientes")
+if is_medico:
 
-    # Solo mostrar columnas que existan
-    available_cols = [col for col in ["id","given_name","family_name","gender","birth_date"] 
-                      if col in patients_df.columns]
+    st.subheader("Pacientes Registrados")
 
-    display_df = patients_df[available_cols]
+    display_cols = [col for col in 
+        ["id","given_name","family_name","gender","birth_date"]
+        if col in patients_df.columns
+    ]
 
-    selected_patient = st.selectbox(
-        "Seleccione un paciente",
-        display_df["id"].tolist()
+    display_df = patients_df[display_cols].reset_index(drop=True)
+
+    selected_index = st.number_input(
+        "Seleccione el número de paciente",
+        min_value=0,
+        max_value=len(display_df)-1,
+        step=1
     )
+
+    st.dataframe(display_df, use_container_width=True)
+
+    selected_patient = display_df.iloc[selected_index]["id"]
 
 # ==========================
 # INFO DEL PACIENTE
@@ -124,6 +135,23 @@ if not patient_info.empty:
     col1.metric("Nombre", f"{info.get('given_name', '')} {info.get('family_name', '')}")
     col2.metric("Género", info.get("gender", "N/A"))
     col3.metric("Fecha Nacimiento", info.get("birth_date", "N/A"))
+
+# ==========================
+# ALERTAS CLÍNICAS (SOLO MÉDICO)
+# ==========================
+if is_medico and alerts_df is not None and not alerts_df.empty:
+
+    patient_alerts = alerts_df[
+        alerts_df["patient_id"] == selected_patient
+    ]
+
+    if not patient_alerts.empty:
+        st.error("⚠️ ALERTAS CLÍNICAS ACTIVAS")
+
+        for _, alert in patient_alerts.iterrows():
+            st.warning(
+                f"{alert['code']} = {alert['value']} → {alert['message']}"
+            )
 
 # ==========================
 # NUEVA OBSERVACIÓN
@@ -189,10 +217,6 @@ if is_medico:
 # ==========================
 # FILTRAR OBSERVACIONES
 # ==========================
-
-# ==========================
-# FILTRAR OBSERVACIONES
-# ==========================
 # ADMIN no recibe observaciones reales
 if "total" in obs_df.columns:
     st.subheader("Resumen de Observaciones por Paciente")
@@ -211,45 +235,19 @@ if patient_obs.empty:
     st.stop()
 
 # ==========================
-# ALERTAS CLÍNICAS
-# ==========================
-if is_medico and alerts:
-
-    patient_alerts = [
-        a for a in alerts
-        if a.get("patient_id") == selected_patient
-    ]
-
-    if patient_alerts:
-        st.subheader("🚨 Alertas Clínicas Detectadas")
-
-        for alert in patient_alerts:
-
-            if alert["type"] == "valor_anormal":
-                st.error(f"Valor anormal detectado en {alert['code']}")
-
-            if alert["type"] == "tendencia_ascendente":
-                st.warning(f"Tendencia ascendente en {alert['code']}")
-
-            if alert["type"] == "tendencia_descendente":
-                st.warning(f"Tendencia descendente en {alert['code']}")
-
-# ==========================
 # LIMPIEZA DATOS
 # ==========================
 if not patient_obs.empty:
 
-    def safe_float(x):
-        try:
-            return float(x)
-        except:
-            return None
-
-    if "value" in patient_obs.columns:
-        patient_obs["value_num"] = patient_obs["value"].apply(safe_float)
+    patient_obs["value_num"] = pd.to_numeric(
+        patient_obs.get("value"),
+        errors="coerce"
+    )
 
     if "created_at" in patient_obs.columns:
-        patient_obs["created_at"] = pd.to_datetime(patient_obs["created_at"])
+        patient_obs["created_at"] = pd.to_datetime(
+            patient_obs["created_at"]
+        )
 
 # ==========================
 # REGLAS DE OUTLIERS
@@ -276,74 +274,101 @@ if not patient_obs.empty:
 # ==========================
 # GRAFICAS
 # ==========================
-st.subheader("Tendencias de Signos Vitales")
+if not patient_obs.empty:
 
-for code in patient_obs["code"].unique():
-    df_code = patient_obs[
-        (patient_obs["code"] == code) &
-        (patient_obs["value_num"].notna())
-    ].sort_values("created_at")
+    st.subheader("Tendencias de Signos Vitales")
 
-    if df_code.empty:
-        continue
-
-    fig = px.line(
-        df_code,
-        x="created_at",
-        y="value_num",
-        title=f"{code} en el tiempo",
-        markers=True
+    patient_obs["value_num"] = pd.to_numeric(
+        patient_obs["value"], errors="coerce"
+    )
+    patient_obs["created_at"] = pd.to_datetime(
+        patient_obs["created_at"]
     )
 
-    # MARCAR VALORES CLÍNICAMENTE ANORMALES (SOLO MÉDICO)
-    if is_medico and "is_abnormal" in df_code.columns:
+    for code in patient_obs["code"].unique():
 
-        abnormal_points = df_code[df_code["is_abnormal"] == True]
+        df_code = patient_obs[
+            (patient_obs["code"] == code) &
+            (patient_obs["value_num"].notna())
+        ].sort_values("created_at")
 
-        if not abnormal_points.empty:
-            fig.add_scatter(
-                x=abnormal_points["created_at"],
-                y=abnormal_points["value_num"],
-                mode="markers",
-                marker=dict(color="red", size=14),
-                name="Anormal"
-            )
+        if df_code.empty:
+            continue
 
-    # OUTLIERS IMPOSIBLES
-    outliers = df_code[df_code["outlier"]]
-
-    if not outliers.empty:
-        fig.add_scatter(
-            x=outliers["created_at"],
-            y=outliers["value_num"],
-            mode="markers",
-            marker=dict(color="red", size=12),
-            name="Outlier"
+        fig = px.line(
+            df_code,
+            x="created_at",
+            y="value_num",
+            title=f"{code} en el tiempo",
+            markers=True
         )
 
-    st.plotly_chart(fig, use_container_width=True)
+        # Valores anormales (backend ya los detectó)
+        if is_medico and "is_abnormal" in df_code.columns:
+
+            abnormal_points = df_code[df_code["is_abnormal"] == True]
+
+            if not abnormal_points.empty:
+                fig.add_scatter(
+                    x=abnormal_points["created_at"],
+                    y=abnormal_points["value_num"],
+                    mode="markers",
+                    marker=dict(color="red", size=14),
+                    name="Valor Anormal"
+                )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+else:
+    st.info("No hay observaciones para este paciente.")
+
+if is_medico and not patient_obs.empty:
+
+    st.subheader("Mapa de Calor Clínico")
+
+    heat_df = patient_obs.pivot_table(
+        index="created_at",
+        columns="code",
+        values="value_num"
+    )
+
+    fig_heat = px.imshow(
+        heat_df,
+        aspect="auto",
+        title="Intensidad de Signos Vitales"
+    )
+
+    st.plotly_chart(fig_heat, use_container_width=True)
 
 # ==========================
 # TABLA RESUMEN
 # ==========================
-st.subheader("Resumen de Observaciones")
+if not patient_obs.empty:
 
-# Incluimos outlier para poder usarlo en estilos
-styled_df = patient_obs[
-    ["created_at", "code", "value", "value_num", "outlier"]
-].sort_values("created_at", ascending=False)
+    st.subheader("Resumen de Observaciones")
 
+    cols = [
+        c for c in 
+        ["created_at", "code", "value", "value_num", "outlier"]
+        if c in patient_obs.columns
+    ]
 
-def highlight_row(row):
-    if row["outlier"]:
-        return ["color: red; font-weight: bold"] * len(row)
-    return [""] * len(row)
+    styled_df = patient_obs[cols].sort_values(
+        "created_at",
+        ascending=False
+    )
 
+    def highlight_row(row):
+        if "outlier" in row and row["outlier"] == True:
+            return ["color: red; font-weight: bold"] * len(row)
+        return [""] * len(row)
 
-# Aplicamos estilos
-styled = styled_df.style.apply(highlight_row, axis=1)
+    styled = styled_df.style.apply(highlight_row, axis=1)
 
-# Ocultamos la columna outlier en la visualización
-styled = styled.hide(axis="columns", subset=["outlier"])
+    if "outlier" in styled_df.columns:
+        styled = styled.hide(axis="columns", subset=["outlier"])
 
-st.dataframe(styled, use_container_width=True)
+    st.dataframe(styled, use_container_width=True)
+
+else:
+    st.info("No hay datos para mostrar en el resumen.")
