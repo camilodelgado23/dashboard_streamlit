@@ -12,6 +12,7 @@ st.set_page_config(page_title="Dashboard Clínica", layout="wide")
 st.title("Dashboard de Gestión Clínica")
 
 # ==========================
+
 # LOGIN
 # ==========================
 with st.sidebar.form("login_form"):
@@ -84,28 +85,31 @@ is_medico = not is_patient
 # ==========================
 # SELECCIÓN DE PACIENTE
 # ==========================
-if is_patient:
+# ADMIN → solo ve conteo
+if "total" in patients_df.columns:
+    st.subheader("Resumen de Observaciones por Paciente (Admin)")
+    st.dataframe(patients_df, use_container_width=True)
+    st.stop()
+
+# PACIENTE
+if len(patients_df) == 1:
     selected_patient = patients_df.iloc[0]["id"]
     st.subheader(f"Paciente: {selected_patient}")
 
+# MÉDICO
 else:
     st.subheader("Lista de Pacientes")
 
-    display_df = patients_df[["id", "given_name", "family_name", "gender", "birth_date"]]
+    display_columns = [col for col in 
+                       ["id", "given_name", "family_name", "gender", "birth_date"] 
+                       if col in patients_df.columns]
 
-    selected_row = st.dataframe(
-        display_df,
-        use_container_width=True,
-        on_select="rerun",
-        selection_mode="single-row"
+    display_df = patients_df[display_columns]
+
+    selected_patient = st.selectbox(
+        "Seleccione un paciente",
+        display_df["id"].tolist()
     )
-
-    if selected_row and selected_row["selection"]["rows"]:
-        selected_index = selected_row["selection"]["rows"][0]
-        selected_patient = display_df.iloc[selected_index]["id"]
-    else:
-        st.info("Seleccione un paciente de la tabla")
-        st.stop()
 
 # ==========================
 # INFO DEL PACIENTE
@@ -184,11 +188,15 @@ if is_medico:
 # ==========================
 # FILTRAR OBSERVACIONES
 # ==========================
-patient_obs = obs_df[obs_df["patient_id"] == selected_patient].copy()
+
+if obs_df is None or obs_df.empty or "patient_id" not in obs_df.columns:
+    st.info("No hay observaciones disponibles.")
+    patient_obs = pd.DataFrame()
+else:
+    patient_obs = obs_df[obs_df["patient_id"] == selected_patient].copy()
 
 if patient_obs.empty:
     st.info("No hay observaciones registradas para este paciente.")
-    st.stop()
 
 # ==========================
 # ALERTAS CLÍNICAS
@@ -217,14 +225,19 @@ if is_medico and alerts:
 # ==========================
 # LIMPIEZA DATOS
 # ==========================
-def safe_float(x):
-    try:
-        return float(x)
-    except:
-        return None
+if not patient_obs.empty:
 
-patient_obs["value_num"] = patient_obs["value"].apply(safe_float)
-patient_obs["created_at"] = pd.to_datetime(patient_obs["created_at"])
+    def safe_float(x):
+        try:
+            return float(x)
+        except:
+            return None
+
+    if "value" in patient_obs.columns:
+        patient_obs["value_num"] = patient_obs["value"].apply(safe_float)
+
+    if "created_at" in patient_obs.columns:
+        patient_obs["created_at"] = pd.to_datetime(patient_obs["created_at"])
 
 # ==========================
 # REGLAS DE OUTLIERS
@@ -233,10 +246,12 @@ def is_outlier(value, code):
     if value is None:
         return False
 
-    if code == "TEMP":
+    if code == "temperature":
         return value < 30 or value > 45
-    if code == "BP":
-        return value < 30 or value > 300
+    if code == "heart_rate":
+        return value < 30 or value > 250
+    if code == "systolic_pressure":
+        return value < 50 or value > 300
     return False
 
 
