@@ -93,7 +93,11 @@ is_medico = not is_admin and not is_patient
 if is_admin:
     st.subheader("Lista de Pacientes (Admin)")
     st.dataframe(patients_df[["id"]], use_container_width=True)
-    st.stop()
+
+    selected_patient = st.selectbox(
+        "Seleccionar Paciente",
+        patients_df["id"]
+    )
 
 # PACIENTE
 if is_patient:
@@ -156,10 +160,13 @@ if is_medico and alerts_df is not None and not alerts_df.empty:
 # ==========================
 # NUEVA OBSERVACIÓN
 # ==========================
-if is_medico:
+
+if is_medico or is_admin:
+
     st.subheader("Registrar Nueva Observación")
 
     with st.form("new_obs_form"):
+
         col1, col2 = st.columns(2)
 
         code = col1.selectbox(
@@ -180,7 +187,10 @@ if is_medico:
 
         submit_obs = st.form_submit_button("Guardar Observación")
 
-        # VALIDACIÓN DE IMPOSIBLES (SOLO VISUAL)
+        # ==========================
+        # VALIDACIÓN CLÍNICA
+        # ==========================
+
         impossible = False
 
         if code == "temperature" and value > 45:
@@ -193,7 +203,8 @@ if is_medico:
         if impossible:
             st.error("⚠ Valor clínicamente imposible detectado")
 
-        if submit_obs:
+        if submit_obs and not impossible:
+
             payload = {
                 "patient_id": selected_patient,
                 "code": code,
@@ -208,11 +219,207 @@ if is_medico:
             )
 
             if r.status_code == 200:
-                st.success("Observación registrada")
+                st.success("Observación registrada correctamente")
                 st.cache_data.clear()
                 st.rerun()
             else:
-                st.error("Error al guardar observación")
+                st.error(f"Error al guardar observación: {r.text}")
+
+# =========================
+# EDITAR OBSERVACIÓN
+# =========================
+
+if is_medico or is_admin:
+
+    st.subheader("Editar Observación")
+
+    obs_id = st.number_input(
+        "ID de Observación",
+        min_value=1,
+        step=1,
+        key="edit_obs"
+    )
+
+    new_value = st.number_input(
+        "Nuevo Valor",
+        step=0.1,
+        key="new_value_obs"
+    )
+
+    if st.button("Actualizar Observación"):
+
+        payload = {
+            "value": new_value
+        }
+
+        r = requests.put(
+            f"{API_URL}/fhir/Observation/{obs_id}",
+            headers=HEADERS,
+            json=payload
+        )
+
+        if r.status_code == 200:
+            st.success("Observación actualizada correctamente")
+            st.cache_data.clear()
+            st.rerun()
+        else:
+            st.error(f"Error al actualizar: {r.text}")
+
+# =========================
+# ELIMINAR OBSERVACIÓN
+# =========================
+
+if is_medico or is_admin:
+
+    st.subheader("Eliminar Observación")
+
+    delete_id = st.number_input(
+        "ID de Observación a eliminar",
+        min_value=1,
+        step=1,
+        key="delete_obs"
+    )
+
+    if st.button("Eliminar Observación"):
+
+        r = requests.delete(
+            f"{API_URL}/fhir/Observation/{delete_id}",
+            headers=HEADERS
+        )
+
+        if r.status_code == 200:
+            st.success("Observación eliminada correctamente")
+            st.cache_data.clear()
+            st.rerun()
+        else:
+            st.error(f"Error al eliminar: {r.text}")
+
+
+# =========================
+# ADMINISTRACIÓN PACIENTES
+# =========================
+
+if is_admin or is_medico:
+
+    st.subheader("Administración de Pacientes")
+
+
+    # =========================
+    # CREAR PACIENTE
+    # =========================
+
+    with st.form("create_patient"):
+
+        st.markdown("### Crear Paciente")
+
+        col1, col2 = st.columns(2)
+
+        given = col1.text_input("Nombre")
+        family = col2.text_input("Apellido")
+
+        col3, col4 = st.columns(2)
+
+        gender = col3.selectbox(
+            "Género",
+            ["male", "female", "other"]
+        )
+
+        birth = col4.text_input(
+            "Fecha Nacimiento (YYYY-MM-DD)"
+        )
+
+        submit_create = st.form_submit_button("Crear Paciente")
+
+        if submit_create:
+
+            payload = {
+                "given_name": given,
+                "family_name": family,
+                "gender": gender,
+                "birth_date": birth
+            }
+
+            r = requests.post(
+                f"{API_URL}/fhir/Patient",
+                headers=HEADERS,
+                json=payload
+            )
+
+            if r.status_code == 200:
+                st.success("Paciente creado correctamente")
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error(f"Error al crear paciente: {r.text}")
+
+# =========================
+# EDITAR PACIENTE (SOLO ADMIN)
+# =========================
+
+if is_admin:
+
+    st.markdown("### Editar Paciente")
+
+    patient_id_edit = st.text_input(
+        "ID Paciente a editar"
+    )
+
+    new_name = st.text_input(
+        "Nuevo Nombre"
+    )
+
+    new_last = st.text_input(
+        "Nuevo Apellido"
+    )
+
+    if st.button("Actualizar Paciente"):
+
+        payload = {}
+
+        if new_name:
+            payload["given_name"] = new_name
+
+        if new_last:
+            payload["family_name"] = new_last
+
+        r = requests.put(
+            f"{API_URL}/fhir/Patient/{patient_id_edit}",
+            headers=HEADERS,
+            json=payload
+        )
+
+        if r.status_code == 200:
+            st.success("Paciente actualizado correctamente")
+            st.cache_data.clear()
+            st.rerun()
+        else:
+            st.error(f"Error al actualizar paciente: {r.text}")
+
+# =========================
+# ELIMINAR PACIENTE (SOLO ADMIN)
+# =========================
+
+if is_admin:
+
+    st.markdown("### Eliminar Paciente")
+
+    patient_delete = st.text_input(
+        "ID Paciente a eliminar"
+    )
+
+    if st.button("Eliminar Paciente"):
+
+        r = requests.delete(
+            f"{API_URL}/fhir/Patient/{patient_delete}",
+            headers=HEADERS
+        )
+
+        if r.status_code == 200:
+            st.success("Paciente eliminado correctamente")
+            st.cache_data.clear()
+            st.rerun()
+        else:
+            st.error(f"Error al eliminar paciente: {r.text}")
 
 # ==========================
 # FILTRAR OBSERVACIONES
@@ -329,7 +536,8 @@ if is_medico and not patient_obs.empty:
     heat_df = patient_obs.pivot_table(
         index="created_at",
         columns="code",
-        values="value_num"
+        values="value_num",
+        aggfunc="mean"
     )
 
     fig_heat = px.imshow(
