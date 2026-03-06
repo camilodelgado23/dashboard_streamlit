@@ -98,48 +98,18 @@ if obs_df is None:
 
 # ==========================
 # DETECTAR ROL
-# FIX #4: La detección ahora es por estructura de datos,
-# no por cantidad de filas. El médico siempre tiene
-# columnas completas y NO tiene "serialized_data".
-# El paciente tiene "patient_key" en la respuesta o
-# no tiene acceso a observations con "alerts".
-# La forma más robusta: preguntar al backend con una
-# clave que solo el admin tiene → serialized_data.
-# Médico → columnas completas sin serialized_data.
-# Paciente → igual que médico pero alerts_df estará vacío
-#             Y el backend solo devuelve 1 paciente.
-# SOLUCIÓN: is_patient solo si NO hay columna "alerts"
-#           en obs y hay exactamente 1 paciente Y
-#           obs_df NO tiene columna is_abnormal visible.
 # ==========================
 
 is_admin = "serialized_data" in patients_df.columns
 
-# El médico recibe alerts en observations; el paciente no
-# También: el paciente no recibe is_abnormal pero sí puede
-# tener 1 solo resultado. Distinguimos por alerts_df:
-# - Si alerts_df existe (no None) y la respuesta del backend
-#   la incluye → es médico.
-# - Si obs_df no tiene columna "alerts" en su respuesta
-#   y hay 1 paciente → es paciente.
-
 if not is_admin:
-    # alerts_df solo viene para médico (el backend no lo incluye para paciente)
-    # Comprobamos si la respuesta original tenía "alerts"
-    # Como ya parseamos, lo detectamos por si alerts_df no es None
-    # y (puede estar vacío pero existe como DataFrame)
-    # Para el paciente, alerts_df será un DataFrame vacío sin columnas
+    
     if alerts_df is not None and "patient_id" in alerts_df.columns or \
        (alerts_df is not None and alerts_df.empty and len(patients_df) > 1):
         is_medico = True
         is_patient = False
     elif len(patients_df) == 1 and alerts_df is not None and alerts_df.empty:
-        # Puede ser médico con 1 paciente O paciente real
-        # Distinción: el paciente no tiene columna "given_name" si es admin
-        # pero médico y paciente ambos la tienen.
-        # Usamos: si obs_df tiene columna "is_abnormal" → es paciente (backend la oculta)
-        # WAIT: backend oculta is_abnormal para paciente haciendo pop()
-        # Entonces si NO está → paciente. Si SÍ está → médico.
+        
         if "is_abnormal" in obs_df.columns:
             is_medico = True
             is_patient = False
@@ -274,8 +244,6 @@ if is_medico or is_admin:
 
 # ==========================
 # EDITAR OBSERVACION
-# FIX #1: Ahora incluye todos los campos (code, value, unit)
-# igual que al crear, y envía el payload completo al PUT.
 # ==========================
 
 if is_admin or is_medico:
@@ -335,8 +303,6 @@ if is_admin or is_medico:
 
 # ==========================
 # CREAR PACIENTE
-# FIX #2: Muestra la patient_key generada tras crear
-# para que el paciente pueda usarla para ingresar.
 # ==========================
 
 if is_admin or is_medico:
@@ -385,7 +351,6 @@ if is_admin or is_medico:
 
 # ==========================
 # EDITAR PACIENTE (ADMIN)
-# FIX #3: Ahora incluye todos los campos editables.
 # ==========================
 
 if is_admin:
